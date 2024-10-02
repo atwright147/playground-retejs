@@ -6,12 +6,30 @@ import {
   Presets as ConnectionPresets,
 } from "rete-connection-plugin";
 import { ReactPlugin, Presets, ReactArea2D } from "rete-react-plugin";
+import "antd/dist/reset.css";
 
-type Schemes = GetSchemes<
-  ClassicPreset.Node,
-  ClassicPreset.Connection<ClassicPreset.Node, ClassicPreset.Node>
->;
-type AreaExtra = ReactArea2D<Schemes>;
+import { ButtonControl, CustomButton } from "./components/CustomButton";
+import { ProgressControl, CustomProgress } from "./components/customProgress";
+
+class Node extends ClassicPreset.Node<
+  { [key in string]: ClassicPreset.Socket },
+  { [key in string]: ClassicPreset.Socket },
+  {
+    [key in string]:
+      | ButtonControl
+      | ProgressControl
+      | ClassicPreset.Control
+      | ClassicPreset.InputControl<"number">
+      | ClassicPreset.InputControl<"text">;
+  }
+> {}
+class Connection<
+  A extends Node,
+  B extends Node
+> extends ClassicPreset.Connection<A, B> {}
+
+type Schemes = GetSchemes<Node, Connection<Node, Node>>;
+type AreaExtra = ReactArea2D<any>;
 
 export async function createEditor(container: HTMLElement) {
   const socket = new ClassicPreset.Socket("socket");
@@ -21,39 +39,60 @@ export async function createEditor(container: HTMLElement) {
   const connection = new ConnectionPlugin<Schemes, AreaExtra>();
   const render = new ReactPlugin<Schemes, AreaExtra>({ createRoot });
 
-  AreaExtensions.selectableNodes(area, AreaExtensions.selector(), {
-    accumulating: AreaExtensions.accumulateOnCtrl(),
-  });
-
-  render.addPreset(Presets.classic.setup());
-
+  render.addPreset(
+    Presets.classic.setup({
+      customize: {
+        control(data) {
+          if (data.payload instanceof ButtonControl) {
+            return CustomButton;
+          }
+          if (data.payload instanceof ProgressControl) {
+            return CustomProgress;
+          }
+          if (data.payload instanceof ClassicPreset.InputControl) {
+            return Presets.classic.Control;
+          }
+          return null;
+        },
+      },
+    })
+  );
   connection.addPreset(ConnectionPresets.classic.setup());
 
   editor.use(area);
   area.use(connection);
   area.use(render);
 
-  AreaExtensions.simpleNodesOrder(area);
-
-  const a = new ClassicPreset.Node("A");
-  a.addControl("a", new ClassicPreset.InputControl("text", { initial: "a" }));
+  const a = new Node("A");
   a.addOutput("a", new ClassicPreset.Output(socket));
+
+  const progressControl = new ProgressControl(0);
+  const inputControl = new ClassicPreset.InputControl("number", {
+    initial: 0,
+    change(value) {
+      progressControl.percent = value;
+      area.update("control", progressControl.id);
+    },
+  });
+
+  a.addControl("input", inputControl);
+  a.addControl("progress", progressControl);
+  a.addControl(
+    "button",
+    new ButtonControl("Randomize", () => {
+      const percent = Math.round(Math.random() * 100);
+
+      inputControl.setValue(percent);
+      area.update("control", inputControl.id);
+
+      progressControl.percent = percent;
+      area.update("control", progressControl.id);
+    })
+  );
   await editor.addNode(a);
 
-  const b = new ClassicPreset.Node("B");
-  b.addControl("b", new ClassicPreset.InputControl("text", { initial: "b" }));
-  b.addInput("b", new ClassicPreset.Input(socket));
-  await editor.addNode(b);
+  AreaExtensions.zoomAt(area, editor.getNodes());
 
-  await editor.addConnection(new ClassicPreset.Connection(a, "a", b, "b"));
-
-  await area.translate(a.id, { x: 0, y: 0 });
-  await area.translate(b.id, { x: 270, y: 0 });
-
-  setTimeout(() => {
-    // wait until nodes rendered because they dont have predefined width and height
-    AreaExtensions.zoomAt(area, editor.getNodes());
-  }, 10);
   return {
     destroy: () => area.destroy(),
   };
